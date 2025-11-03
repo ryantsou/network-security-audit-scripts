@@ -154,9 +154,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Author
 
-**Riantsoa RAJHONSON**
-
-Network Security Professional
+**Sedra Riantsoa Lala RAJHONSON**
 
 ## Disclaimer
 
