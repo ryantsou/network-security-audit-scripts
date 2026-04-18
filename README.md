@@ -4,7 +4,7 @@
 
 **Author:** Riantsoa RAJHONSON
 
-A comprehensive collection of Python security audit scripts designed to help network administrators and security professionals identify potential vulnerabilities and security issues in their infrastructure.
+Python scripts for common security audit tasks: host discovery, unused IP detection, and open port scanning.
 
 ## Project Status
 
@@ -221,7 +221,7 @@ Potential next steps for a stronger release:
 
 For public sharing, use anonymized demo data and keep real LAN reports private.
 
-Example public demo commands:
+Example demo commands:
 
 ```bash
 # Discovery demo using a documentation-only subnet
