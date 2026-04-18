@@ -1,6 +1,6 @@
 # Network Security Audit Scripts
 
-[![CI](https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY/actions/workflows/ci.yml)
+[![CI](https://github.com/ryantsou/network-security-audit-scripts/actions/workflows/ci.yml/badge.svg)](https://github.com/ryantsou/network-security-audit-scripts/actions/workflows/ci.yml)
 
 **Author:** Riantsoa RAJHONSON
 
@@ -33,9 +33,7 @@ It automatically runs on each push and pull request:
 - Syntax validation for all audit scripts
 - Unit tests from `tests/`
 
-Before publishing, replace the badge URL placeholders:
-- `YOUR_GITHUB_USERNAME`
-- `YOUR_REPOSITORY`
+The badge points to the repository CI workflow for this project.
 
 ## Overview
 
