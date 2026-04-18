@@ -13,14 +13,6 @@ import platform
 import concurrent.futures
 from datetime import datetime
 
-try:
-    from scapy.all import ARP, Ether, srp
-    import nmap
-except ImportError as e:
-    print(f"Error: Missing required module - {e}")
-    print("Please install requirements: pip install -r requirements.txt")
-    sys.exit(1)
-
 
 class UnusedIPDetector:
     def __init__(self, network_range, timeout=2):
@@ -29,6 +21,10 @@ class UnusedIPDetector:
         self.used_ips = set()
         self.unused_ips = set()
         self.all_ips = []
+        self._scapy_available = None
+        self._nmap_available = None
+        self._scapy_import_error = None
+        self._nmap_import_error = None
         
     def validate_network(self):
         """Validate network CIDR notation"""
@@ -44,9 +40,7 @@ class UnusedIPDetector:
     
     def ping_sweep(self, ip):
         """Perform ping sweep to detect active hosts"""
-        param = '-n' if platform.system().lower() == 'windows' else '-c'
-        command = ['ping', param, '1', '-W' if platform.system().lower() != 'windows' else '-w', 
-                   str(self.timeout * 1000), ip]
+        command = self._build_ping_command(ip)
         
         try:
             result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=self.timeout)
@@ -55,20 +49,60 @@ class UnusedIPDetector:
             return ip, False
         except subprocess.TimeoutExpired:
             return ip, False
-        except Exception as e:
+        except Exception:
             return ip, False
+
+    def _build_ping_command(self, ip):
+        """Build a cross-platform ping command with a single probe and timeout."""
+        os_name = platform.system().lower()
+        if os_name == 'windows':
+            timeout_ms = int(self.timeout * 1000)
+            return ['ping', '-n', '1', '-w', str(timeout_ms), ip]
+        timeout_seconds = max(1, int(round(self.timeout)))
+        return ['ping', '-c', '1', '-W', str(timeout_seconds), ip]
+
+    def _ensure_scapy(self):
+        """Lazy import Scapy so ping/nmap can run without it."""
+        if self._scapy_available is not None:
+            return self._scapy_available
+        try:
+            from scapy.all import ARP, Ether, srp
+            self._ARP = ARP
+            self._Ether = Ether
+            self._srp = srp
+            self._scapy_available = True
+        except ImportError as e:
+            self._scapy_import_error = str(e)
+            self._scapy_available = False
+        return self._scapy_available
+
+    def _ensure_nmap(self):
+        """Lazy import python-nmap so ping/arp can run without it."""
+        if self._nmap_available is not None:
+            return self._nmap_available
+        try:
+            import nmap
+            self._nmap = nmap
+            self._nmap_available = True
+        except ImportError as e:
+            self._nmap_import_error = str(e)
+            self._nmap_available = False
+        return self._nmap_available
     
     def arp_scan(self):
         """Use ARP scanning for more reliable detection (requires root/admin)"""
         print("[*] Performing ARP scan (may require elevated privileges)...")
+        if not self._ensure_scapy():
+            print(f"[!] Scapy module unavailable: {self._scapy_import_error}")
+            return False
         try:
             # Create ARP packet
-            arp = ARP(pdst=self.network_range)
-            ether = Ether(dst="ff:ff:ff:ff:ff:ff")
+            arp = self._ARP(pdst=self.network_range)
+            ether = self._Ether(dst="ff:ff:ff:ff:ff:ff")
             packet = ether/arp
             
             # Send packet and capture response
-            result = srp(packet, timeout=self.timeout, verbose=False)[0]
+            result = self._srp(packet, timeout=self.timeout, verbose=False)[0]
             
             for sent, received in result:
                 self.used_ips.add(received.psrc)
@@ -85,8 +119,11 @@ class UnusedIPDetector:
     def nmap_scan(self):
         """Use nmap for comprehensive scanning"""
         print("[*] Performing Nmap scan...")
+        if not self._ensure_nmap():
+            print(f"[!] Nmap module unavailable: {self._nmap_import_error}")
+            return False
         try:
-            nm = nmap.PortScanner()
+            nm = self._nmap.PortScanner()
             nm.scan(hosts=self.network_range, arguments='-sn')  # Ping scan only
             
             for host in nm.all_hosts():
@@ -110,7 +147,11 @@ class UnusedIPDetector:
             total = len(self.all_ips)
             
             for future in concurrent.futures.as_completed(future_to_ip):
-                ip, is_active = future.result()
+                try:
+                    ip, is_active = future.result()
+                except Exception as e:
+                    print(f"[!] Ping worker failed: {e}")
+                    continue
                 completed += 1
                 
                 if is_active:

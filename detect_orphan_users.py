@@ -7,14 +7,6 @@ Description: Detects orphan user accounts in Active Directory and local systems
 
 import argparse
 import sys
-try:
-    from ldap3 import Server, Connection, ALL, SUBTREE
-    import paramiko
-    from pywinrm.protocol import Protocol
-except ImportError as e:
-    print(f"Error: Missing required module - {e}")
-    print("Please install requirements: pip install -r requirements.txt")
-    sys.exit(1)
 
 
 class OrphanUserDetector:
@@ -23,12 +15,48 @@ class OrphanUserDetector:
         self.username = username
         self.password = password
         self.orphan_users = []
+        self._ldap_available = None
+        self._paramiko_available = None
+        self._ldap_import_error = None
+        self._paramiko_import_error = None
+
+    def _ensure_ldap(self):
+        """Lazy import ldap3 so Linux-only scan works without ldap libs."""
+        if self._ldap_available is not None:
+            return self._ldap_available
+        try:
+            from ldap3 import Server, Connection, ALL, SUBTREE
+            self._Server = Server
+            self._Connection = Connection
+            self._ALL = ALL
+            self._SUBTREE = SUBTREE
+            self._ldap_available = True
+        except ImportError as e:
+            self._ldap_import_error = str(e)
+            self._ldap_available = False
+        return self._ldap_available
+
+    def _ensure_paramiko(self):
+        """Lazy import paramiko so AD-only scan works without ssh libs."""
+        if self._paramiko_available is not None:
+            return self._paramiko_available
+        try:
+            import paramiko
+            self._paramiko = paramiko
+            self._paramiko_available = True
+        except ImportError as e:
+            self._paramiko_import_error = str(e)
+            self._paramiko_available = False
+        return self._paramiko_available
     
     def connect_ldap(self):
         """Connect to Active Directory via LDAP"""
+        if not self._ensure_ldap():
+            print(f"LDAP module unavailable: {self._ldap_import_error}")
+            return None
         try:
-            server = Server(self.domain_controller, get_info=ALL)
-            conn = Connection(server, user=self.username, password=self.password, auto_bind=True)
+            server = self._Server(self.domain_controller, get_info=self._ALL)
+            conn = self._Connection(server, user=self.username, password=self.password, auto_bind=True)
             return conn
         except Exception as e:
             print(f"LDAP Connection Error: {e}")
@@ -45,13 +73,14 @@ class OrphanUserDetector:
             conn.search(
                 search_base=search_base,
                 search_filter='(&(objectClass=user)(objectCategory=person))',
-                search_scope=SUBTREE,
+                search_scope=self._SUBTREE,
                 attributes=['sAMAccountName', 'lastLogon', 'whenCreated', 'memberOf']
             )
             
             for entry in conn.entries:
                 # Check if user has no group memberships (potential orphan)
-                if not entry.memberOf.value or len(entry.memberOf.value) == 0:
+                member_of = entry.memberOf.value
+                if not member_of:
                     self.orphan_users.append({
                         'username': str(entry.sAMAccountName),
                         'created': str(entry.whenCreated),
@@ -65,9 +94,12 @@ class OrphanUserDetector:
     
     def check_linux_orphans(self, host, ssh_user, ssh_password):
         """Check for orphan users on Linux systems"""
+        if not self._ensure_paramiko():
+            print(f"Paramiko module unavailable: {self._paramiko_import_error}")
+            return
         try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh = self._paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(self._paramiko.AutoAddPolicy())
             ssh.connect(host, username=ssh_user, password=ssh_password)
             
             # Check /etc/passwd for users without valid shells or home directories
@@ -123,9 +155,9 @@ class OrphanUserDetector:
 
 def main():
     parser = argparse.ArgumentParser(description='Detect orphan user accounts')
-    parser.add_argument('-dc', '--domain-controller', required=True, help='Domain controller address')
-    parser.add_argument('-u', '--username', required=True, help='Domain admin username')
-    parser.add_argument('-p', '--password', required=True, help='Domain admin password')
+    parser.add_argument('-dc', '--domain-controller', help='Domain controller address')
+    parser.add_argument('-u', '--username', help='Domain admin username')
+    parser.add_argument('-p', '--password', help='Domain admin password')
     parser.add_argument('-lh', '--linux-hosts', nargs='+', help='Linux hosts to check')
     parser.add_argument('-lu', '--linux-user', help='Linux SSH username')
     parser.add_argument('-lp', '--linux-password', help='Linux SSH password')
@@ -133,12 +165,25 @@ def main():
     
     args = parser.parse_args()
     
+    has_ad_args = any([args.domain_controller, args.username, args.password])
+    has_linux_args = bool(args.linux_hosts)
+
+    if not has_ad_args and not has_linux_args:
+        parser.error('Provide AD credentials (-dc -u -p), Linux targets (-lh -lu -lp), or both.')
+
+    if has_ad_args and not all([args.domain_controller, args.username, args.password]):
+        parser.error('AD scan requires -dc, -u and -p together.')
+
+    if has_linux_args and not all([args.linux_user, args.linux_password]):
+        parser.error('Linux scan requires -lh with -lu and -lp.')
+
     detector = OrphanUserDetector(args.domain_controller, args.username, args.password)
-    
-    print("[*] Detecting AD orphan users...")
-    detector.detect_ad_orphans()
-    
-    if args.linux_hosts and args.linux_user and args.linux_password:
+
+    if all([args.domain_controller, args.username, args.password]):
+        print("[*] Detecting AD orphan users...")
+        detector.detect_ad_orphans()
+
+    if args.linux_hosts:
         print("[*] Checking Linux systems...")
         for host in args.linux_hosts:
             print(f"  Checking {host}...")

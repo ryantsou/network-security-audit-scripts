@@ -11,14 +11,6 @@ import socket
 import concurrent.futures
 from datetime import datetime
 
-try:
-    import nmap
-    from scapy.all import sr1, IP, TCP, ICMP
-except ImportError as e:
-    print(f"Error: Missing required module - {e}")
-    print("Please install requirements: pip install -r requirements.txt")
-    sys.exit(1)
-
 
 # Common port definitions
 COMMON_PORTS = {
@@ -51,6 +43,10 @@ class OpenPortScanner:
         self.ports = ports if ports else list(COMMON_PORTS.keys())
         self.timeout = timeout
         self.scan_results = {}
+        self._scapy_available = None
+        self._nmap_available = None
+        self._scapy_import_error = None
+        self._nmap_import_error = None
         
     def check_host_alive(self, host):
         """Check if host is alive using ICMP ping"""
@@ -59,9 +55,37 @@ class OpenPortScanner:
             sock.settimeout(self.timeout)
             result = sock.connect_ex((host, 80))
             sock.close()
-            return True
-        except:
+            return result == 0
+        except socket.error:
             return False
+
+    def _ensure_scapy(self):
+        """Lazy import Scapy so socket scanning works without optional deps."""
+        if self._scapy_available is not None:
+            return self._scapy_available
+        try:
+            from scapy.all import sr1, IP, TCP
+            self._sr1 = sr1
+            self._IP = IP
+            self._TCP = TCP
+            self._scapy_available = True
+        except ImportError as e:
+            self._scapy_import_error = str(e)
+            self._scapy_available = False
+        return self._scapy_available
+
+    def _ensure_nmap(self):
+        """Lazy import nmap so non-nmap scanning still works."""
+        if self._nmap_available is not None:
+            return self._nmap_available
+        try:
+            import nmap
+            self._nmap = nmap
+            self._nmap_available = True
+        except ImportError as e:
+            self._nmap_import_error = str(e)
+            self._nmap_available = False
+        return self._nmap_available
     
     def scan_port_socket(self, host, port):
         """Scan a single port using socket connection"""
@@ -85,17 +109,19 @@ class OpenPortScanner:
     
     def scan_port_scapy(self, host, port):
         """Scan port using Scapy for more detailed information"""
+        if not self._ensure_scapy():
+            return None
         try:
             # Create SYN packet
-            packet = IP(dst=host)/TCP(dport=port, flags='S')
-            response = sr1(packet, timeout=self.timeout, verbose=False)
+            packet = self._IP(dst=host)/self._TCP(dport=port, flags='S')
+            response = self._sr1(packet, timeout=self.timeout, verbose=False)
             
             if response:
-                if response.haslayer(TCP):
-                    if response.getlayer(TCP).flags == 0x12:  # SYN-ACK
+                if response.haslayer(self._TCP):
+                    if response.getlayer(self._TCP).flags == 0x12:  # SYN-ACK
                         # Send RST to close connection
-                        rst = IP(dst=host)/TCP(dport=port, flags='R')
-                        sr1(rst, timeout=self.timeout, verbose=False)
+                        rst = self._IP(dst=host)/self._TCP(dport=port, flags='R')
+                        self._sr1(rst, timeout=self.timeout, verbose=False)
                         
                         service = COMMON_PORTS.get(port, 'Unknown')
                         return {
@@ -104,16 +130,19 @@ class OpenPortScanner:
                             'service': service,
                             'risky': port in RISKY_PORTS
                         }
-                    elif response.getlayer(TCP).flags == 0x14:  # RST-ACK
+                    elif response.getlayer(self._TCP).flags == 0x14:  # RST-ACK
                         return None
             return None
-        except Exception as e:
+        except Exception:
             return None
     
     def scan_host_nmap(self, host, ports_str):
         """Scan host using Nmap for comprehensive results"""
+        if not self._ensure_nmap():
+            print(f"[!] Nmap module unavailable: {self._nmap_import_error}")
+            return []
         try:
-            nm = nmap.PortScanner()
+            nm = self._nmap.PortScanner()
             print(f"[*] Scanning {host} with Nmap...")
             nm.scan(host, ports_str, arguments='-sV -T4')
             
@@ -148,19 +177,31 @@ class OpenPortScanner:
                                   for port in self.ports}
                 
                 for future in concurrent.futures.as_completed(future_to_port):
-                    result = future.result()
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        print(f"[!] Error scanning port {future_to_port[future]} on {host}: {e}")
+                        continue
                     if result:
                         open_ports.append(result)
                         status = "[RISKY]" if result['risky'] else "[INFO]"
                         print(f"  {status} Port {result['port']}/tcp - {result['service']} - OPEN")
         
         elif method == 'scapy':
+            if not self._ensure_scapy():
+                print(f"[!] Scapy module unavailable: {self._scapy_import_error}")
+                self.scan_results[host] = []
+                return
             with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
                 future_to_port = {executor.submit(self.scan_port_scapy, host, port): port 
                                   for port in self.ports}
                 
                 for future in concurrent.futures.as_completed(future_to_port):
-                    result = future.result()
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        print(f"[!] Error scanning port {future_to_port[future]} on {host}: {e}")
+                        continue
                     if result:
                         open_ports.append(result)
                         status = "[RISKY]" if result['risky'] else "[INFO]"
@@ -288,13 +329,18 @@ Examples:
         print("[!] Scanning ALL ports (1-65535). This will take a very long time!")
     elif args.ports:
         try:
-            ports = [int(p.strip()) for p in args.ports.split(',')]
+            ports = [int(p.strip()) for p in args.ports.split(',') if p.strip()]
         except ValueError:
             print("Error: Invalid port format. Use comma-separated numbers (e.g., 22,80,443)")
             sys.exit(1)
     else:
         ports = list(COMMON_PORTS.keys())
         print(f"[*] Using default common ports: {len(ports)} ports")
+
+    invalid_ports = [port for port in ports if port < 1 or port > 65535]
+    if invalid_ports:
+        print(f"Error: Invalid port values: {invalid_ports}. Ports must be between 1 and 65535")
+        sys.exit(1)
     
     scanner = OpenPortScanner(args.targets, ports, args.timeout)
     scanner.scan_all_hosts(args.method)

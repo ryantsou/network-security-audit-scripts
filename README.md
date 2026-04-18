@@ -1,8 +1,41 @@
 # Network Security Audit Scripts
 
+[![CI](https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY/actions/workflows/ci.yml)
+
 **Author:** Riantsoa RAJHONSON
 
 A comprehensive collection of Python security audit scripts designed to help network administrators and security professionals identify potential vulnerabilities and security issues in their infrastructure.
+
+## Project Status
+
+This project provides:
+- Improved input validation and safer CLI behavior
+- Better resilience when optional dependencies are not installed
+- Unit tests for critical logic and CLI flows
+- Automated CI validation on push and pull requests
+- Updated documentation aligned with current script behavior
+
+## Highlights
+
+- Lightweight Python tooling for common security audit tasks
+- Modular scanning modes with optional dependencies
+- CLI-first workflow with report generation
+- Unit-tested core logic
+- GitHub Actions CI for repeatable validation
+
+## Continuous Integration (CI)
+
+GitHub Actions workflow file:
+- `.github/workflows/ci.yml`
+
+It automatically runs on each push and pull request:
+- Dependency installation from `requirements.txt`
+- Syntax validation for all audit scripts
+- Unit tests from `tests/`
+
+Before publishing, replace the badge URL placeholders:
+- `YOUR_GITHUB_USERNAME`
+- `YOUR_REPOSITORY`
 
 ## Overview
 
@@ -47,6 +80,12 @@ pip install -r requirements.txt
 
 **Note:** Some features may require elevated privileges (root/administrator) to function properly, particularly ARP scanning and Scapy-based operations.
 
+Dependency behavior:
+- `scapy` is required only for `scapy`/ARP-based scan modes
+- `python-nmap` is required only for `nmap` scan modes
+- `ldap3` is required for Active Directory orphan user detection
+- `paramiko` is required for Linux orphan user checks over SSH
+
 ## Usage
 
 ### Detect Orphan Users
@@ -55,11 +94,10 @@ pip install -r requirements.txt
 # Scan Active Directory for orphan users
 python detect_orphan_users.py -dc dc.example.com -u admin@example.com -p password
 
-# Include Linux hosts in the scan
-python detect_orphan_users.py -dc dc.example.com -u admin@example.com -p password \
-    -lh 192.168.1.10 192.168.1.11 -lu root -lp linuxpassword
+# Linux-only mode (no AD credentials required)
+python detect_orphan_users.py -lh 192.168.1.10 192.168.1.11 -lu root -lp linuxpassword
 
-# Save report to file
+# Include Linux hosts in the scan
 python detect_orphan_users.py -dc dc.example.com -u admin@example.com -p password -o orphan_report.txt
 ```
 
@@ -99,13 +137,15 @@ python detect_open_ports.py -t 192.168.1.1 --all-ports -m socket
 
 ### detect_orphan_users.py
 
-- `-dc, --domain-controller` - Domain controller address (required)
-- `-u, --username` - Domain admin username (required)
-- `-p, --password` - Domain admin password (required)
+- `-dc, --domain-controller` - Domain controller address (required for AD scan)
+- `-u, --username` - Domain admin username (required for AD scan)
+- `-p, --password` - Domain admin password (required for AD scan)
 - `-lh, --linux-hosts` - Linux hosts to check (space-separated)
-- `-lu, --linux-user` - Linux SSH username
-- `-lp, --linux-password` - Linux SSH password
+- `-lu, --linux-user` - Linux SSH username (required with `-lh`)
+- `-lp, --linux-password` - Linux SSH password (required with `-lh`)
 - `-o, --output` - Output file for report
+
+You can run AD-only, Linux-only, or both in one execution.
 
 ### detect_unused_ips.py
 
@@ -123,6 +163,9 @@ python detect_open_ports.py -t 192.168.1.1 --all-ports -m socket
 - `-m, --method` - Scanning method: socket, scapy, or nmap (default: socket)
 - `--timeout` - Timeout in seconds per connection (default: 2)
 - `-o, --output` - Output file for report
+
+Input validation:
+- Invalid port values outside `1-65535` are rejected with a clear error message.
 
 ## Security Considerations
 
@@ -142,11 +185,56 @@ See `requirements.txt` for a complete list of dependencies:
 - scapy>=2.5.0
 - python-nmap>=0.7.1
 - paramiko>=3.0.0
-- pywinrm>=0.4.3
 - ldap3>=2.9.1
-- netaddr>=0.9.0
-- ipaddress>=1.0.23
-- argparse>=1.4.0
+
+## Tests
+
+Run the unit test suite:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Run a quick syntax validation:
+
+```bash
+python -m py_compile detect_open_ports.py detect_orphan_users.py detect_unused_ips.py
+```
+
+The test suite validates core parsing, report generation, command building, and CLI validation flows without requiring real network scanning.
+
+Current local validation status:
+- Unit tests: `10 passed`
+- Syntax check: `OK`
+
+## Suggested Improvements
+
+Potential next steps for a stronger release:
+- Add JSON and CSV export formats for machine-readable reporting
+- Add a single orchestration command to discover live hosts and scan ports in one workflow
+- Add IPv6 support for discovery and port scanning
+- Add severity scoring and summary statistics to reports
+- Add banner output and `--quiet` / `--verbose` flags for better operator control
+- Add optional host discovery via ARP/Nmap as a first-class mode in the port scanner
+
+## Demo
+
+For public sharing, use anonymized demo data and keep real LAN reports private.
+
+Example public demo commands:
+
+```bash
+# Discovery demo using a documentation-only subnet
+python detect_unused_ips.py -n 192.0.2.0/30 -m ping -t 1 -w 10 -o demo_unused_ips.txt
+
+# Port scan demo against placeholder targets
+python detect_open_ports.py -t 192.0.2.10 192.0.2.11 -p 22,80,443 --timeout 1 -m socket -o demo_open_ports.txt
+```
+
+Public demo rules:
+- Do not publish real LAN IPs, hostnames, or credentials
+- Keep real scan reports local and out of version control
+- Use the generated demo files only as illustrative artifacts
 
 ## License
 
@@ -165,6 +253,13 @@ These tools are provided "as is" without warranty of any kind. The author is not
 Contributions are welcome! Please feel free to submit pull requests or open issues for bugs, feature requests, or improvements.
 
 ## Changelog
+
+### Version 1.1.0
+- Added automated unit tests in `tests/`
+- Made optional dependencies lazy-loaded to avoid blocking unrelated scan modes
+- Improved CLI validation for AD-only, Linux-only, and combined orphan-user workflows
+- Added stricter port input validation for open port scanning
+- Updated README and requirements for consistency
 
 ### Version 1.0.0 (Initial Release)
 - Orphan user detection for AD and Linux
